@@ -105,7 +105,6 @@ const processImages = async (req, res, next) => {
     next(err);
   }
 };
-
 /**
  * POST /api/v1/images/download-zip
  * Bundle processed images into a ZIP for download
