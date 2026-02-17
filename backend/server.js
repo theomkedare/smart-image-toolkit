@@ -23,6 +23,11 @@ const PORT = process.env.PORT || 5000;
 // ─── Ensure Required Directories Exist ────────────────────────────────────────
 ensureDirectories();
 
+// Root route — stops Render health check 404 noise
+app.get('/', (req, res) => {
+  res.json({ message: 'Smart Image Toolkit API is running.' });
+});
+
 // ─── Security Middleware ───────────────────────────────────────────────────────
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }, // allow image serving
