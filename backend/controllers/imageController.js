@@ -30,56 +30,80 @@ const processImages = async (req, res, next) => {
   }
 
   const uploadedPaths = files.map((f) => f.path);
-  const results = [];
-  const errors = [];
 
-  await Promise.all(
-    files.map(async (file) => {
-      try {
-        const originalSize = await getFileSize(file.path);
+  try {
+    if (files.length === 1) {
+      // ── Single file: stream directly back as binary ──────────────────
+      const file = files[0];
+      const originalSize = await getFileSize(file.path);
+      const processed = await processImage({
+        inputPath: file.path,
+        originalName: file.originalname,
+        settings,
+      });
 
+      const processedSize = await getFileSize(processed.outputPath);
+      const ext = processed.outputFormat === 'jpeg' ? 'jpg' : processed.outputFormat;
+      const mimeMap = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', avif: 'image/avif' };
+
+      // Send metadata as headers, file as body
+      res.setHeader('Content-Type', mimeMap[processed.outputFormat] || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="processed.${ext}"`);
+      res.setHeader('X-Original-Name', file.originalname);
+      res.setHeader('X-Original-Size', originalSize);
+      res.setHeader('X-Processed-Size', processedSize);
+      res.setHeader('X-Original-Width', processed.sourceDimensions.width);
+      res.setHeader('X-Original-Height', processed.sourceDimensions.height);
+      res.setHeader('X-Processed-Width', processed.outputDimensions.width);
+      res.setHeader('X-Processed-Height', processed.outputDimensions.height);
+      res.setHeader('X-Compression-Ratio', ((1 - processedSize / originalSize) * 100).toFixed(1));
+      res.setHeader('X-Output-Format', processed.outputFormat);
+      res.setHeader('Access-Control-Expose-Headers', 
+        'X-Original-Name,X-Original-Size,X-Processed-Size,X-Original-Width,X-Original-Height,X-Processed-Width,X-Processed-Height,X-Compression-Ratio,X-Output-Format'
+      );
+
+      // Stream file then delete both files
+      const fs = require('fs');
+      const stream = fs.createReadStream(processed.outputPath);
+      stream.pipe(res);
+      stream.on('end', () => {
+        cleanupFiles([...uploadedPaths, processed.outputPath]).catch(() => {});
+      });
+
+    } else {
+      // ── Multiple files: return as ZIP ────────────────────────────────
+      const archiver = require('archiver');
+      const { processImage: pi } = require('../utils/imageProcessor');
+
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', 'attachment; filename="processed-images.zip"');
+
+      const archive = archiver('zip', { zlib: { level: 6 } });
+      archive.pipe(res);
+
+      const processedPaths = [];
+
+      for (const file of files) {
         const processed = await processImage({
           inputPath: file.path,
           originalName: file.originalname,
           settings,
         });
-
-        const processedSize = await getFileSize(processed.outputPath);
-
-        results.push({
-          originalName: file.originalname,
-          originalSize,
-          originalDimensions: processed.sourceDimensions,
-          originalFormat: processed.sourceFormat,
-          processedName: processed.outputFilename,
-          processedSize,
-          processedDimensions: processed.outputDimensions,
-          processedFormat: processed.outputFormat,
-          downloadUrl: `/processed/${processed.outputFilename}`,
-          compressionRatio: originalSize > 0
-            ? ((1 - processedSize / originalSize) * 100).toFixed(1)
-            : '0',
-        });
-      } catch (err) {
-        logger.error(`Failed to process ${file.originalname}: ${err.message}`);
-        errors.push({ file: file.originalname, error: err.message });
+        const ext = processed.outputFormat === 'jpeg' ? 'jpg' : processed.outputFormat;
+        const baseName = file.originalname.replace(/\.[^/.]+$/, '');
+        archive.file(processed.outputPath, { name: `${baseName}.${ext}` });
+        processedPaths.push(processed.outputPath);
       }
-    })
-  );
 
-  // Delete temp upload files after processing
-  await cleanupFiles(uploadedPaths);
-
-  logger.info(`Processed ${results.length} image(s), ${errors.length} error(s).`);
-
-  res.status(200).json({
-    success: true,
-    processed: results,
-    errors,
-    total: files.length,
-    succeeded: results.length,
-    failed: errors.length,
-  });
+      archive.finalize();
+      archive.on('end', () => {
+        cleanupFiles([...uploadedPaths, ...processedPaths]).catch(() => {});
+      });
+    }
+  } catch (err) {
+    await cleanupFiles(uploadedPaths).catch(() => {});
+    next(err);
+  }
 };
 
 /**

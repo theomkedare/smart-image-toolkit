@@ -19,76 +19,63 @@ const FORMAT_ALIASES = { jpg: 'jpeg' };
  * @param {Object} options.settings - Processing settings from client
  * @returns {Promise<Object>} - Result metadata
  */
-const processImage = async ({ inputPath, originalName, settings }) => {
-  const {
-    width,
-    height,
-    maintainAspectRatio = true,
-    quality = 80,
-    format = 'jpeg',
-  } = settings;
+export const processImages = async (files, settings, onProgress) => {
+  const formData = new FormData();
+  files.forEach((file) => formData.append('images', file));
+  formData.append('settings', JSON.stringify(settings));
 
-  // Normalize format alias (jpg → jpeg)
-  const normalizedFormat = FORMAT_ALIASES[format] || format;
+  const response = await api.post('/images/process', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    responseType: 'blob',
+    onUploadProgress: (e) => {
+      if (onProgress && e.total) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    },
+  });
 
-  if (!SUPPORTED_FORMATS.includes(normalizedFormat)) {
-    throw new Error(`Unsupported format: ${format}. Supported: ${SUPPORTED_FORMATS.join(', ')}`);
+  // Multiple files → ZIP download
+  if (response.headers['content-type']?.includes('zip')) {
+    const url = URL.createObjectURL(response.data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'processed-images.zip';
+    a.click();
+    URL.revokeObjectURL(url);
+    return { processed: [], errors: [], total: files.length, succeeded: files.length, failed: 0, isZip: true };
   }
 
-  // Quality bounds
-  const clampedQuality = Math.min(100, Math.max(1, parseInt(quality, 10)));
+  // Single file → extract metadata from headers + create preview URL
+  const h = response.headers;
+  const blobUrl = URL.createObjectURL(response.data);
 
-  // Output filename
-  const ext = normalizedFormat === 'jpeg' ? 'jpg' : normalizedFormat;
-  const outputFilename = `${uuidv4()}.${ext}`;
-  const outputPath = path.join(DIRS.processed, outputFilename);
-
-  // Build Sharp pipeline
-  let pipeline = sharp(inputPath);
-
-  // Get source metadata
-  const metadata = await pipeline.metadata();
-
-  // Apply resize if dimensions provided
-  if (width || height) {
-    pipeline = pipeline.resize({
-      width: width ? parseInt(width, 10) : undefined,
-      height: height ? parseInt(height, 10) : undefined,
-      fit: maintainAspectRatio ? 'inside' : 'fill',
-      withoutEnlargement: true,
-    });
-  }
-
-  // Apply format + quality
-  switch (normalizedFormat) {
-    case 'jpeg':
-      pipeline = pipeline.jpeg({ quality: clampedQuality, mozjpeg: true });
-      break;
-    case 'png':
-      // PNG quality: map 1-100 to compressionLevel 9-0
-      pipeline = pipeline.png({
-        compressionLevel: Math.round((100 - clampedQuality) / 11),
-        quality: clampedQuality,
-      });
-      break;
-    case 'webp':
-      pipeline = pipeline.webp({ quality: clampedQuality });
-      break;
-    case 'avif':
-      pipeline = pipeline.avif({ quality: clampedQuality });
-      break;
-  }
-
-  // Write output
-  const outputInfo = await pipeline.toFile(outputPath);
+  const originalSize = parseInt(h['x-original-size'] || '0');
+  const processedSize = parseInt(h['x-processed-size'] || '0');
 
   return {
-    outputPath,
-    outputFilename,
-    outputFormat: normalizedFormat,
-    outputDimensions: { width: outputInfo.width, height: outputInfo.height },
-    sourceFormat: metadata.format,
-    sourceDimensions: { width: metadata.width, height: metadata.height },
+    isZip: false,
+    processed: [{
+      originalName: h['x-original-name'] || files[0].name,
+      originalSize,
+      originalDimensions: {
+        width: parseInt(h['x-original-width'] || '0'),
+        height: parseInt(h['x-original-height'] || '0'),
+      },
+      originalFormat: files[0].type.split('/')[1],
+      processedName: `processed.${h['x-output-format'] === 'jpeg' ? 'jpg' : h['x-output-format']}`,
+      processedSize,
+      processedDimensions: {
+        width: parseInt(h['x-processed-width'] || '0'),
+        height: parseInt(h['x-processed-height'] || '0'),
+      },
+      processedFormat: h['x-output-format'],
+      downloadUrl: blobUrl,
+      compressionRatio: h['x-compression-ratio'] || '0',
+    }],
+    errors: [],
+    total: 1,
+    succeeded: 1,
+    failed: 0,
   };
 };
 
