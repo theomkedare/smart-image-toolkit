@@ -6,8 +6,10 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: '/api/v1',
-  timeout: 120000, // 2 min for large files
+  baseURL: import.meta.env.VITE_API_URL
+    ? `${import.meta.env.VITE_API_URL}/api/v1`
+    : '/api/v1',
+  timeout: 120000,
 });
 
 // Request interceptor — attach auth token when implemented
