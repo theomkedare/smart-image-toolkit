@@ -16,15 +16,21 @@ const logger = require('../config/logger');
  * Process one or more uploaded images
  */
 const processImages = async (req, res, next) => {
+  console.log('=== PROCESS REQUEST RECEIVED ===');
+  
   const files = req.files;
 
   if (!files || files.length === 0) {
+    console.log('ERROR: No files uploaded');
     return res.status(400).json({ success: false, error: 'No files uploaded.' });
   }
+
+  console.log('Files received:', files.length);
 
   let settings;
   try {
     settings = req.body.settings ? JSON.parse(req.body.settings) : {};
+    console.log('Settings:', settings);
   } catch {
     return res.status(400).json({ success: false, error: 'Invalid settings JSON.' });
   }
@@ -33,17 +39,28 @@ const processImages = async (req, res, next) => {
 
   try {
     if (files.length === 1) {
-      // ── Single file: stream directly back as binary ──────────────────
+      console.log('Processing single file...');
+      
       const file = files[0];
       const originalSize = await getFileSize(file.path);
       
+      console.log('Calling processImage...');
       const processed = await processImage({
         inputPath: file.path,
         originalName: file.originalname,
         settings,
       });
 
+      console.log('Processing complete:', processed);
+
+      // Check if output file exists
+      if (!fs.existsSync(processed.outputPath)) {
+        throw new Error('Processed file was not created');
+      }
+
       const processedSize = await getFileSize(processed.outputPath);
+      console.log('File sizes - original:', originalSize, 'processed:', processedSize);
+
       const ext = processed.outputFormat === 'jpeg' ? 'jpg' : processed.outputFormat;
       const mimeMap = { 
         jpeg: 'image/jpeg', 
@@ -52,32 +69,33 @@ const processImages = async (req, res, next) => {
         avif: 'image/avif' 
       };
 
+      const compressionRatio = originalSize > 0 
+        ? ((1 - processedSize / originalSize) * 100).toFixed(1) 
+        : '0';
+
       // Send metadata as headers
       res.setHeader('Content-Type', mimeMap[processed.outputFormat] || 'application/octet-stream');
       res.setHeader('Content-Disposition', `attachment; filename="processed.${ext}"`);
       res.setHeader('X-Original-Name', file.originalname || 'unknown');
-      res.setHeader('X-Original-Size', (originalSize || 0).toString());
-      res.setHeader('X-Processed-Size', (processedSize || 0).toString());
+      res.setHeader('X-Original-Size', originalSize.toString());
+      res.setHeader('X-Processed-Size', processedSize.toString());
       res.setHeader('X-Original-Width', (processed.sourceDimensions?.width || 0).toString());
       res.setHeader('X-Original-Height', (processed.sourceDimensions?.height || 0).toString());
       res.setHeader('X-Processed-Width', (processed.outputDimensions?.width || 0).toString());
       res.setHeader('X-Processed-Height', (processed.outputDimensions?.height || 0).toString());
-      res.setHeader('X-Compression-Ratio', originalSize > 0 
-        ? ((1 - processedSize / originalSize) * 100).toFixed(1) 
-        : '0'
-      );
+      res.setHeader('X-Compression-Ratio', compressionRatio);
       res.setHeader('X-Output-Format', processed.outputFormat || 'jpeg');
       res.setHeader('Access-Control-Expose-Headers', 
         'X-Original-Name,X-Original-Size,X-Processed-Size,X-Original-Width,X-Original-Height,X-Processed-Width,X-Processed-Height,X-Compression-Ratio,X-Output-Format'
       );
 
-      // Stream file then delete both files
+      console.log('Streaming file:', processed.outputPath);
+
+      // Stream file
       const stream = fs.createReadStream(processed.outputPath);
-      stream.pipe(res);
-      stream.on('end', () => {
-        cleanupFiles([...uploadedPaths, processed.outputPath]).catch(() => {});
-      });
+      
       stream.on('error', (err) => {
+        console.error('Stream error:', err);
         logger.error(`Stream error: ${err.message}`);
         cleanupFiles([...uploadedPaths, processed.outputPath]).catch(() => {});
         if (!res.headersSent) {
@@ -85,8 +103,16 @@ const processImages = async (req, res, next) => {
         }
       });
 
+      stream.on('end', () => {
+        console.log('Stream ended, cleaning up files');
+        cleanupFiles([...uploadedPaths, processed.outputPath]).catch(() => {});
+      });
+
+      stream.pipe(res);
+
     } else {
-      // ── Multiple files: return as ZIP ────────────────────────────────
+      console.log('Processing multiple files as ZIP...');
+      
       res.setHeader('Content-Type', 'application/zip');
       res.setHeader('Content-Disposition', 'attachment; filename="processed-images.zip"');
 
@@ -102,35 +128,46 @@ const processImages = async (req, res, next) => {
             originalName: file.originalname,
             settings,
           });
-          const ext = processed.outputFormat === 'jpeg' ? 'jpg' : processed.outputFormat;
-          const baseName = file.originalname.replace(/\.[^/.]+$/, '');
-          archive.file(processed.outputPath, { name: `${baseName}.${ext}` });
-          processedPaths.push(processed.outputPath);
+          
+          if (fs.existsSync(processed.outputPath)) {
+            const ext = processed.outputFormat === 'jpeg' ? 'jpg' : processed.outputFormat;
+            const baseName = file.originalname.replace(/\.[^/.]+$/, '');
+            archive.file(processed.outputPath, { name: `${baseName}.${ext}` });
+            processedPaths.push(processed.outputPath);
+          }
         } catch (err) {
           logger.error(`Failed to process ${file.originalname}: ${err.message}`);
+          console.error(`Failed to process ${file.originalname}:`, err);
         }
       }
 
       archive.finalize();
+      
       archive.on('end', () => {
+        console.log('ZIP archive complete');
         cleanupFiles([...uploadedPaths, ...processedPaths]).catch(() => {});
       });
+      
       archive.on('error', (err) => {
+        console.error('Archive error:', err);
         logger.error(`Archive error: ${err.message}`);
         cleanupFiles([...uploadedPaths, ...processedPaths]).catch(() => {});
       });
     }
   } catch (err) {
+    console.error('Process error:', err);
     await cleanupFiles(uploadedPaths).catch(() => {});
     logger.error(`Process error: ${err.message}`, { stack: err.stack });
-    next(err);
+    
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: err.message });
+    }
   }
 };
 
 /**
  * POST /api/v1/images/download-zip
  * Bundle processed images into a ZIP for download
- * Body: { filenames: ['abc.jpg', 'def.webp'] }
  */
 const downloadZip = (req, res, next) => {
   const { filenames } = req.body;
@@ -139,7 +176,6 @@ const downloadZip = (req, res, next) => {
     return res.status(400).json({ success: false, error: 'No filenames provided.' });
   }
 
-  // Sanitize filenames to prevent path traversal
   const safe = filenames.map((f) => path.basename(f));
 
   res.setHeader('Content-Type', 'application/zip');
@@ -173,7 +209,6 @@ const downloadZip = (req, res, next) => {
 
 /**
  * GET /api/v1/images/metadata/:filename
- * Return image metadata from /processed directory (no processing)
  */
 const getMetadata = async (req, res, next) => {
   const { filename } = req.params;
