@@ -13,11 +13,20 @@ export const ResultsPanel = ({ results, errors, onDownloadAll }) => {
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   };
 
-  const handleSingleDownload = (url, name) => {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
+  const handleSingleDownload = (result) => {
+    if (result.blob) {
+      const url = URL.createObjectURL(result.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.processedName;
+      a.click();
+      URL.revokeObjectURL(url);
+    } else {
+      const a = document.createElement('a');
+      a.href = result.downloadUrl;
+      a.download = result.processedName;
+      a.click();
+    }
   };
 
   return (
@@ -112,7 +121,7 @@ export const ResultsPanel = ({ results, errors, onDownloadAll }) => {
               </div>
 
               <button
-                onClick={() => handleSingleDownload(result.downloadUrl, result.processedName)}
+                onClick={() => handleSingleDownload(result)}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-500 hover:bg-brand-600
                   rounded-lg text-xs font-semibold text-white transition-colors"
               >
