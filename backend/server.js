@@ -20,6 +20,9 @@ const logger = require('./config/logger');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Trust Render proxy (fixes rate limiter IP detection)
+app.set('trust proxy', 1);
+
 // ─── Ensure Required Directories Exist ────────────────────────────────────────
 ensureDirectories();
 
