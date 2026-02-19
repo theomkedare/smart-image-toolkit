@@ -37,9 +37,24 @@ app.use(helmet({
 }));
 
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    const allowedOrigins = [
+      'http://localhost:5173',
+      'https://imagetools.omkedare.dev',
+      'https://smart-image-toolkit.vercel.app', // keep old one during transition
+    ];
+    
+    const isVercelPreview = origin?.includes('vercel.app');
+    
+    if (!origin || allowedOrigins.includes(origin) || isVercelPreview) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS not allowed'));
+    }
+  },
   methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
 }));
 
 // ─── General Middleware ────────────────────────────────────────────────────────
