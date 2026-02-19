@@ -80,6 +80,11 @@ export const processImages = async (files, settings, onProgress) => {
   const originalSize = parseInt(h['x-original-size'] || '0', 10);
   const processedSize = parseInt(h['x-processed-size'] || '0', 10);
 
+  // Generate processed filename from original
+  const ext = h['x-output-format'] === 'jpeg' ? 'jpg' : h['x-output-format'];
+  const originalName = files[0].name.replace(/\.[^/.]+$/, ''); // remove extension
+  const processedName = `${originalName}-processed.${ext}`;
+
   return {
     isZip: false,
     processed: [{
@@ -90,7 +95,7 @@ export const processImages = async (files, settings, onProgress) => {
         height: parseInt(h['x-original-height'] || '0', 10),
       },
       originalFormat: files[0].type.split('/')[1] || 'unknown',
-      processedName: `processed.${h['x-output-format'] === 'jpeg' ? 'jpg' : h['x-output-format']}`,
+      processedName: processedName,
       processedSize,
       processedDimensions: {
         width: parseInt(h['x-processed-width'] || '0', 10),
