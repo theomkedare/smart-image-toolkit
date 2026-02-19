@@ -1,31 +1,108 @@
-import sharp from 'sharp';
-import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
-import { DIRS } from './fileUtils.js';
+/**
+ * Sharp-based image processing utility
+ * Handles: resize, compress, format conversion
+ */
 
-export const processImage = async (options) => {
-  const { inputPath, originalName, settings } = options;
+const sharp = require('sharp');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+const { DIRS } = require('./fileUtils');
 
-  const outputFormat = settings.format || 'jpeg';
-  const outputFileName = `${uuidv4()}.${outputFormat}`;
-  const outputPath = path.join(DIRS.processed, outputFileName);
+const SUPPORTED_FORMATS = ['jpeg', 'png', 'webp', 'avif'];
+const FORMAT_ALIASES = { jpg: 'jpeg' };
 
-  let image = sharp(inputPath);
+/**
+ * Process a single image file
+ * @param {Object} options
+ * @param {string} options.inputPath - Absolute path to source file
+ * @param {string} options.originalName - Original filename
+ * @param {Object} options.settings - Processing settings from client
+ * @returns {Promise<Object>} - Result metadata
+ */
+const processImage = async ({ inputPath, originalName, settings }) => {
+  try {
+    const {
+      width,
+      height,
+      maintainAspectRatio = true,
+      quality = 80,
+      format = 'jpeg',
+    } = settings;
 
-  if (settings.width || settings.height) {
-    image = image.resize({
-      width: settings.width || null,
-      height: settings.height || null,
-      fit: 'inside',
-    });
+    // Normalize format alias (jpg → jpeg)
+    const normalizedFormat = FORMAT_ALIASES[format] || format;
+
+    if (!SUPPORTED_FORMATS.includes(normalizedFormat)) {
+      throw new Error(`Unsupported format: ${format}. Supported: ${SUPPORTED_FORMATS.join(', ')}`);
+    }
+
+    // Quality bounds
+    const clampedQuality = Math.min(100, Math.max(1, parseInt(quality, 10) || 80));
+
+    // Output filename
+    const ext = normalizedFormat === 'jpeg' ? 'jpg' : normalizedFormat;
+    const outputFilename = `${uuidv4()}.${ext}`;
+    const outputPath = path.join(DIRS.processed, outputFilename);
+
+    // Build Sharp pipeline
+    let pipeline = sharp(inputPath);
+
+    // Get source metadata
+    const metadata = await pipeline.metadata();
+
+    // Apply resize if dimensions provided
+    if (width || height) {
+      const targetWidth = width ? parseInt(width, 10) : undefined;
+      const targetHeight = height ? parseInt(height, 10) : undefined;
+
+      pipeline = pipeline.resize({
+        width: targetWidth,
+        height: targetHeight,
+        fit: maintainAspectRatio ? 'inside' : 'fill',
+        withoutEnlargement: true,
+      });
+    }
+
+    // Apply format + quality
+    switch (normalizedFormat) {
+      case 'jpeg':
+        pipeline = pipeline.jpeg({ quality: clampedQuality, mozjpeg: true });
+        break;
+      case 'png':
+        // PNG quality: map 1-100 to compressionLevel 9-0
+        pipeline = pipeline.png({
+          compressionLevel: Math.round((100 - clampedQuality) / 11),
+          quality: clampedQuality,
+        });
+        break;
+      case 'webp':
+        pipeline = pipeline.webp({ quality: clampedQuality });
+        break;
+      case 'avif':
+        pipeline = pipeline.avif({ quality: clampedQuality });
+        break;
+    }
+
+    // Write output
+    const outputInfo = await pipeline.toFile(outputPath);
+
+    return {
+      outputPath,
+      outputFilename,
+      outputFormat: normalizedFormat,
+      outputDimensions: { 
+        width: outputInfo.width || 0, 
+        height: outputInfo.height || 0 
+      },
+      sourceFormat: metadata.format || 'unknown',
+      sourceDimensions: { 
+        width: metadata.width || 0, 
+        height: metadata.height || 0 
+      },
+    };
+  } catch (err) {
+    throw new Error(`Image processing failed: ${err.message}`);
   }
-
-  await image
-    .toFormat(outputFormat, { quality: settings.quality || 80 })
-    .toFile(outputPath);
-
-  return {
-    outputPath,
-    outputFileName,
-  };
 };
+
+module.exports = { processImage, SUPPORTED_FORMATS };
