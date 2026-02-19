@@ -52,28 +52,24 @@ const processImages = async (req, res, next) => {
         avif: 'image/avif' 
       };
 
-      // Send metadata as headers, file as body
-      const headers = {
-        'Content-Type': mimeMap[processed.outputFormat] || 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="processed.${ext}"`,
-        'X-Original-Name': file.originalname || 'unknown',
-        'X-Original-Size': (originalSize || 0).toString(),
-        'X-Processed-Size': (processedSize || 0).toString(),
-        'X-Original-Width': (processed.sourceDimensions?.width || 0).toString(),
-        'X-Original-Height': (processed.sourceDimensions?.height || 0).toString(),
-        'X-Processed-Width': (processed.outputDimensions?.width || 0).toString(),
-        'X-Processed-Height': (processed.outputDimensions?.height || 0).toString(),
-        'X-Compression-Ratio': originalSize > 0 
-          ? ((1 - processedSize / originalSize) * 100).toFixed(1) 
-          : '0',
-        'X-Output-Format': processed.outputFormat || 'jpeg',
-        'Access-Control-Expose-Headers': 
-          'X-Original-Name,X-Original-Size,X-Processed-Size,X-Original-Width,X-Original-Height,X-Processed-Width,X-Processed-Height,X-Compression-Ratio,X-Output-Format',
-      };
-
-      Object.entries(headers).forEach(([key, value]) => {
-        res.setHeader(key, value);
-      });
+      // Send metadata as headers
+      res.setHeader('Content-Type', mimeMap[processed.outputFormat] || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="processed.${ext}"`);
+      res.setHeader('X-Original-Name', file.originalname || 'unknown');
+      res.setHeader('X-Original-Size', (originalSize || 0).toString());
+      res.setHeader('X-Processed-Size', (processedSize || 0).toString());
+      res.setHeader('X-Original-Width', (processed.sourceDimensions?.width || 0).toString());
+      res.setHeader('X-Original-Height', (processed.sourceDimensions?.height || 0).toString());
+      res.setHeader('X-Processed-Width', (processed.outputDimensions?.width || 0).toString());
+      res.setHeader('X-Processed-Height', (processed.outputDimensions?.height || 0).toString());
+      res.setHeader('X-Compression-Ratio', originalSize > 0 
+        ? ((1 - processedSize / originalSize) * 100).toFixed(1) 
+        : '0'
+      );
+      res.setHeader('X-Output-Format', processed.outputFormat || 'jpeg');
+      res.setHeader('Access-Control-Expose-Headers', 
+        'X-Original-Name,X-Original-Size,X-Processed-Size,X-Original-Width,X-Original-Height,X-Processed-Width,X-Processed-Height,X-Compression-Ratio,X-Output-Format'
+      );
 
       // Stream file then delete both files
       const stream = fs.createReadStream(processed.outputPath);
